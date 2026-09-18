@@ -1,7 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Board } from '../types';
 import { boardApi, templateApi } from '../services/api';
 import { useWhiteboardStore } from '../store/whiteboard';
+import { useRequest } from '../hooks/useRequest';
+import { useMutation } from '../hooks/useMutation';
 import { TemplateCenter } from './TemplateCenter';
 
 interface DashboardProps {
@@ -130,52 +132,48 @@ const BoardCard: React.FC<{
 };
 
 export const Dashboard: React.FC<DashboardProps> = ({ onBoardSelect }) => {
-  const [boards, setBoards] = useState<Board[]>([]);
-  const [loading, setLoading] = useState(true);
   const [isTemplateCenterOpen, setIsTemplateCenterOpen] = useState(false);
   const username = useWhiteboardStore((state) => state.username);
 
   const userId = 'user-1';
 
-  useEffect(() => {
-    loadBoards();
-  }, []);
+  // 列表读取统一走 useRequest：loading/错误/刷新由共用流程处理
+  const {
+    data: boards,
+    loading,
+    errorMessage: loadError,
+    reload: loadBoards,
+  } = useRequest(() => boardApi.getBoards(userId), {
+    action: '加载白板列表',
+  });
 
-  const loadBoards = async () => {
-    try {
-      setLoading(true);
-      const data = await boardApi.getBoards(userId);
-      setBoards(data);
-    } catch (error) {
-      console.error('Failed to load boards:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleCreateBoard = async (name: string, templateId?: string) => {
-    try {
-      let newBoard: Board | null = null;
-      if (templateId) {
-        newBoard = await templateApi.createBoardFromTemplate(templateId, { name, ownerId: userId });
-      } else {
-        newBoard = await boardApi.createBoard({ name, ownerId: userId });
+  // 创建统一走 useMutation：防重入 + 统一错误文案，成功后刷新列表并打开白板
+  const [createBoard] = useMutation(
+    (params: { name: string; templateId?: string }) => {
+      if (params.templateId) {
+        return templateApi.createBoardFromTemplate(params.templateId, {
+          name: params.name,
+          ownerId: userId,
+        });
       }
-      if (newBoard) {
+      return boardApi.createBoard({ name: params.name, ownerId: userId });
+    },
+    {
+      action: '创建白板',
+      onSuccess: async (newBoard) => {
         await loadBoards();
         onBoardSelect(newBoard);
-      } else {
-        throw new Error('Failed to create board');
-      }
-    } catch (error) {
-      console.error('Failed to create board:', error);
-      alert('创建白板失败，请重试');
+      },
     }
-  };
+  );
 
-  const myBoards = boards.filter((b) => b.ownerId === userId);
-  const sharedBoards = boards.filter((b) => b.ownerId !== userId);
-  const recentBoards = [...boards].sort(
+  const handleCreateBoard = (name: string, templateId?: string) =>
+    createBoard({ name, templateId });
+
+  const boardList = boards ?? [];
+  const myBoards = boardList.filter((b) => b.ownerId === userId);
+  const sharedBoards = boardList.filter((b) => b.ownerId !== userId);
+  const recentBoards = [...boardList].sort(
     (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
   );
 
@@ -214,7 +212,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ onBoardSelect }) => {
     </div>
   );
 
-  const BoardGrid: React.FC<{ boards: Board[]; loading?: boolean }> = ({ boards: boardList, loading }) => {
+  const BoardGrid: React.FC<{ boards: Board[]; loading?: boolean; error?: string | null }> = ({
+    boards: boardList,
+    loading,
+    error,
+  }) => {
     if (loading) {
       return (
         <div
@@ -235,6 +237,40 @@ export const Dashboard: React.FC<DashboardProps> = ({ onBoardSelect }) => {
               }}
             />
           ))}
+        </div>
+      );
+    }
+
+    // 请求失败与「空列表」是不同状态：失败给出错误说明和重试入口
+    if (error) {
+      return (
+        <div
+          style={{
+            textAlign: 'center',
+            padding: '48px 16px',
+            color: '#dc2626',
+            background: '#fef2f2',
+            border: '1px solid #fecaca',
+            borderRadius: '12px',
+          }}
+        >
+          <p style={{ margin: 0, fontSize: '14px' }}>{error}</p>
+          <button
+            onClick={() => loadBoards()}
+            style={{
+              marginTop: '12px',
+              padding: '6px 16px',
+              fontSize: '13px',
+              fontWeight: 500,
+              color: '#fff',
+              background: '#667eea',
+              border: 'none',
+              borderRadius: '8px',
+              cursor: 'pointer',
+            }}
+          >
+            重试
+          </button>
         </div>
       );
     }
@@ -456,17 +492,21 @@ export const Dashboard: React.FC<DashboardProps> = ({ onBoardSelect }) => {
 
         <section style={{ marginBottom: '40px' }}>
           <SectionHeader title="最近编辑" count={loading ? undefined : recentBoards.length} />
-          <BoardGrid boards={recentBoards.slice(0, 8)} loading={loading && boards.length === 0} />
+          <BoardGrid
+            boards={recentBoards.slice(0, 8)}
+            loading={loading && boardList.length === 0}
+            error={!loading && boardList.length === 0 ? loadError : null}
+          />
         </section>
 
         <section style={{ marginBottom: '40px' }}>
           <SectionHeader title="我创建的" count={loading ? undefined : myBoards.length} />
-          <BoardGrid boards={myBoards} loading={loading && boards.length === 0} />
+          <BoardGrid boards={myBoards} loading={loading && boardList.length === 0} />
         </section>
 
         <section>
           <SectionHeader title="我参与的" count={loading ? undefined : sharedBoards.length} />
-          <BoardGrid boards={sharedBoards} loading={loading && boards.length === 0} />
+          <BoardGrid boards={sharedBoards} loading={loading && boardList.length === 0} />
         </section>
       </main>
 

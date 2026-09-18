@@ -1,44 +1,38 @@
 import { Board, Template } from '../types';
+import { request, requestOrNull, send } from './http';
 
 const API_BASE_URL = '/api/boards';
 const TEMPLATE_API_URL = '/api/templates';
 
 export const boardApi = {
+  /** 列表：成功时返回数组，空列表仍返回 []（与「找不到记录」的 null 区分） */
   async getBoards(userId: string): Promise<Board[]> {
-    const response = await fetch(`${API_BASE_URL}?userId=${userId}`);
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error || 'Failed to fetch boards');
-    }
-    return response.json();
+    return request<Board[]>(API_BASE_URL, { query: { userId } });
   },
 
+  /** 详情：记录不存在时返回 null（既有行为保持不变） */
   async getBoard(boardId: string): Promise<Board | null> {
-    const response = await fetch(`${API_BASE_URL}/${boardId}`);
-    if (!response.ok) {
-      if (response.status === 404) return null;
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error || 'Failed to fetch board');
-    }
-    return response.json();
+    return requestOrNull<Board>(`${API_BASE_URL}/${boardId}`);
   },
 
-  async createBoard(data: { name: string; ownerId: string; width?: number; height?: number }): Promise<Board | null> {
-    const response = await fetch(API_BASE_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error || 'Failed to create board');
-    }
-    return response.json();
+  /** 创建：相同请求在途时复用同一个 Promise，重复提交不会产生第二条记录 */
+  async createBoard(data: {
+    name: string;
+    ownerId: string;
+    width?: number;
+    height?: number;
+  }): Promise<Board> {
+    return request<Board>(API_BASE_URL, { method: 'POST', body: data });
   },
 
+  /** 删除：保持既有约定——成功返回 true，失败（含 404/5xx）返回 false，不抛错 */
   async deleteBoard(boardId: string): Promise<boolean> {
-    const response = await fetch(`${API_BASE_URL}/${boardId}`, { method: 'DELETE' });
-    return response.ok;
+    try {
+      const response = await send(`${API_BASE_URL}/${boardId}`, { method: 'DELETE' });
+      return response.ok;
+    } catch {
+      return false;
+    }
   },
 
   getMockBoards(): Board[] {
@@ -116,94 +110,25 @@ export const boardApi = {
   },
 };
 
-const mockTemplates: Template[] = [
-  {
-    _id: 'template-meeting',
-    name: '会议纪要',
-    description: '快速记录会议要点、待办事项和决议',
-    category: 'meeting',
-    thumbnail: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-    icon: '📝',
-    width: 3000,
-    height: 2000,
-    backgroundColor: '#f8f9fa',
-  },
-  {
-    _id: 'template-workflow',
-    name: '流程梳理',
-    description: '可视化梳理业务流程、工作流和决策路径',
-    category: 'workflow',
-    thumbnail: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)',
-    icon: '🔄',
-    width: 3500,
-    height: 2200,
-    backgroundColor: '#f0f9ff',
-  },
-  {
-    _id: 'template-weekly',
-    name: '周计划',
-    description: '规划一周工作，跟踪每日任务和重要事项',
-    category: 'productivity',
-    thumbnail: 'linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)',
-    icon: '📅',
-    width: 3200,
-    height: 2000,
-    backgroundColor: '#f0fdf4',
-  },
-];
-
-const createMockBoardFromTemplate = (
-  template: Template,
-  data: { name: string; ownerId: string }
-): Board => {
-  const now = new Date().toISOString();
-  return {
-    _id: `board-${Date.now()}`,
-    name: data.name || template.name,
-    ownerId: data.ownerId,
-    collaborators: [],
-    layers: template.layers || [{ name: '图层 1', visible: true, locked: false, order: 0, elements: [] }],
-    width: template.width,
-    height: template.height,
-    backgroundColor: template.backgroundColor,
-    createdAt: now,
-    updatedAt: now,
-  };
-};
-
 export const templateApi = {
+  /** 模板列表：空列表仍返回 [] */
   async getTemplates(): Promise<Template[]> {
-    const response = await fetch(TEMPLATE_API_URL);
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error || 'Failed to fetch templates');
-    }
-    return response.json();
+    return request<Template[]>(TEMPLATE_API_URL);
   },
 
+  /** 模板详情：模板不存在时返回 null（既有行为保持不变） */
   async getTemplate(templateId: string): Promise<Template | null> {
-    const response = await fetch(`${TEMPLATE_API_URL}/${templateId}`);
-    if (!response.ok) {
-      if (response.status === 404) return null;
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error || 'Failed to fetch template');
-    }
-    return response.json();
+    return requestOrNull<Template>(`${TEMPLATE_API_URL}/${templateId}`);
   },
 
+  /** 从模板创建白板：在途相同请求合并，避免重复提交产生重复白板 */
   async createBoardFromTemplate(
     templateId: string,
     data: { name: string; ownerId: string }
-  ): Promise<Board | null> {
-    const response = await fetch(`${TEMPLATE_API_URL}/${templateId}/create`, {
+  ): Promise<Board> {
+    return request<Board>(`${TEMPLATE_API_URL}/${templateId}/create`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
+      body: data,
     });
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error || 'Failed to create board from template');
-    }
-    return response.json();
   },
 };

@@ -1,87 +1,70 @@
 import React, { useState, useEffect } from 'react';
 import { Template } from '../types';
 import { templateApi } from '../services/api';
+import { useRequest } from '../hooks/useRequest';
+import { useMutation } from '../hooks/useMutation';
 
 interface TemplateCenterProps {
   isOpen: boolean;
   onClose: () => void;
-  onCreate: (name: string, templateId?: string) => void;
+  onCreate: (name: string, templateId?: string) => Promise<unknown> | void;
 }
 
 export const TemplateCenter: React.FC<TemplateCenterProps> = ({ isOpen, onClose, onCreate }) => {
-  const [templates, setTemplates] = useState<Template[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
   const [name, setName] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+
+  // 模板列表读取统一走 useRequest
+  const {
+    data: templates,
+    loading,
+    errorMessage: loadError,
+    reload: loadTemplates,
+  } = useRequest(() => templateApi.getTemplates(), {
+    action: '加载模板列表',
+    ready: isOpen,
+  });
+
+  // 创建统一走 useMutation：两个创建入口复用同一流程，重复提交被防重入拦住
+  const [createBoard, { loading: creating, errorMessage: createError }] = useMutation(
+    (params: { name: string; templateId?: string }) =>
+      onCreate(params.name, params.templateId) as Promise<unknown>,
+    { action: '创建白板' }
+  );
+
+  const templateList = templates ?? [];
 
   useEffect(() => {
     if (isOpen) {
-      loadTemplates();
       setSelectedTemplate(null);
       setName('');
-      setError(null);
     }
   }, [isOpen]);
 
-  const loadTemplates = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const data = await templateApi.getTemplates();
-      setTemplates(data);
-    } catch (error) {
-      console.error('Failed to load templates:', error);
-      setError('加载模板失败，请刷新重试');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   if (!isOpen) return null;
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (creating) return;
+  const submitCreate = async (templateId?: string) => {
+    const fallbackName =
+      templateId !== undefined
+        ? templateList.find((t) => t._id === templateId)?.name || '未命名白板'
+        : '未命名白板';
+    const boardName = name.trim() || fallbackName;
 
-    const boardName = name.trim() || (selectedTemplate
-      ? templates.find((t) => t._id === selectedTemplate)?.name || '未命名白板'
-      : '未命名白板');
-
-    try {
-      setCreating(true);
-      setError(null);
-      await onCreate(boardName, selectedTemplate || undefined);
+    const result = await createBoard({ name: boardName, templateId });
+    if (result.data !== null) {
       setName('');
       setSelectedTemplate(null);
       onClose();
-    } catch (error) {
-      console.error('Failed to create board:', error);
-      setError('创建白板失败，请重试');
-    } finally {
-      setCreating(false);
     }
   };
 
-  const handleCreateBlank = async () => {
-    if (creating) return;
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    void submitCreate(selectedTemplate || undefined);
+  };
 
-    const boardName = name.trim() || '未命名白板';
-
-    try {
-      setCreating(true);
-      setError(null);
-      await onCreate(boardName, undefined);
-      setName('');
-      setSelectedTemplate(null);
-      onClose();
-    } catch (error) {
-      console.error('Failed to create board:', error);
-      setError('创建白板失败，请重试');
-    } finally {
-      setCreating(false);
-    }
+  const handleCreateBlank = () => {
+    void submitCreate(undefined);
   };
 
   const TemplateCard: React.FC<{
@@ -294,7 +277,7 @@ export const TemplateCenter: React.FC<TemplateCenterProps> = ({ isOpen, onClose,
               onChange={(e) => setName(e.target.value)}
               placeholder={
                 selectedTemplate
-                  ? templates.find((t) => t._id === selectedTemplate)?.name || '请输入白板名称'
+                  ? templateList.find((t) => t._id === selectedTemplate)?.name || '请输入白板名称'
                   : '请输入白板名称'
               }
               autoFocus
@@ -474,6 +457,35 @@ export const TemplateCenter: React.FC<TemplateCenterProps> = ({ isOpen, onClose,
                     />
                   ))}
                 </div>
+              ) : loadError ? (
+                <div
+                  style={{
+                    textAlign: 'center',
+                    padding: '32px 16px',
+                    color: '#dc2626',
+                    background: '#fef2f2',
+                    border: '1px solid #fecaca',
+                    borderRadius: '12px',
+                  }}
+                >
+                  <p style={{ margin: 0, fontSize: '14px' }}>{loadError}</p>
+                  <button
+                    onClick={() => loadTemplates()}
+                    style={{
+                      marginTop: '12px',
+                      padding: '6px 16px',
+                      fontSize: '13px',
+                      fontWeight: 500,
+                      color: '#fff',
+                      background: '#667eea',
+                      border: 'none',
+                      borderRadius: '8px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    重试
+                  </button>
+                </div>
               ) : (
                 <div
                   style={{
@@ -482,7 +494,7 @@ export const TemplateCenter: React.FC<TemplateCenterProps> = ({ isOpen, onClose,
                     gap: '16px',
                   }}
                 >
-                  {templates.map((template) => (
+                  {templateList.map((template) => (
                     <TemplateCard
                       key={template._id}
                       template={template}
@@ -502,7 +514,7 @@ export const TemplateCenter: React.FC<TemplateCenterProps> = ({ isOpen, onClose,
               background: '#f9fafb',
             }}
           >
-            {error && (
+            {createError && (
               <div
                 style={{
                   padding: '10px 14px',
@@ -514,7 +526,7 @@ export const TemplateCenter: React.FC<TemplateCenterProps> = ({ isOpen, onClose,
                   marginBottom: '12px',
                 }}
               >
-                {error}
+                {createError}
               </div>
             )}
             <div
@@ -526,7 +538,7 @@ export const TemplateCenter: React.FC<TemplateCenterProps> = ({ isOpen, onClose,
             >
               <div style={{ fontSize: '13px', color: '#6b7280' }}>
                 {selectedTemplate
-                  ? `已选择：${templates.find((t) => t._id === selectedTemplate)?.name}`
+                  ? `已选择：${templateList.find((t) => t._id === selectedTemplate)?.name}`
                   : '已选择：空白白板'}
               </div>
               <div style={{ display: 'flex', gap: '12px' }}>
