@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Board } from '../types';
 import { boardApi, templateApi } from '../services/api';
 import { useWhiteboardStore } from '../store/whiteboard';
+import { useResource, useAction, ActionOutcome } from '../hooks/useRequest';
 import { TemplateCenter } from './TemplateCenter';
 
 interface DashboardProps {
@@ -130,47 +131,50 @@ const BoardCard: React.FC<{
 };
 
 export const Dashboard: React.FC<DashboardProps> = ({ onBoardSelect }) => {
-  const [boards, setBoards] = useState<Board[]>([]);
-  const [loading, setLoading] = useState(true);
   const [isTemplateCenterOpen, setIsTemplateCenterOpen] = useState(false);
   const username = useWhiteboardStore((state) => state.username);
 
   const userId = 'user-1';
 
-  useEffect(() => {
-    loadBoards();
-  }, []);
+  // 统一读取流程：loading / 空列表 / 失败 三种状态由 useResource 收敛
+  const {
+    data: boardsData,
+    loading,
+    error: loadError,
+    reload: reloadBoards,
+  } = useResource<Board[], [string]>(() => boardApi.getBoards(userId), {
+    scope: '加载白板列表',
+    errorMessage: '加载白板失败，请刷新重试',
+  });
+  const boards = boardsData ?? [];
 
-  const loadBoards = async () => {
-    try {
-      setLoading(true);
-      const data = await boardApi.getBoards(userId);
-      setBoards(data);
-    } catch (error) {
-      console.error('Failed to load boards:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+  // 统一创建流程：在途期间重复触发复用同一请求，重新提交不会产生重复记录
+  const createBoardAction = useAction(
+    (params: { name: string; templateId?: string }) =>
+      params.templateId
+        ? templateApi.createBoardFromTemplate(params.templateId, {
+            name: params.name,
+            ownerId: userId,
+          })
+        : boardApi.createBoard({ name: params.name, ownerId: userId }),
+    { scope: '创建白板', errorMessage: '创建白板失败，请重试' }
+  );
 
-  const handleCreateBoard = async (name: string, templateId?: string) => {
-    try {
-      let newBoard: Board | null = null;
-      if (templateId) {
-        newBoard = await templateApi.createBoardFromTemplate(templateId, { name, ownerId: userId });
-      } else {
-        newBoard = await boardApi.createBoard({ name, ownerId: userId });
-      }
-      if (newBoard) {
-        await loadBoards();
-        onBoardSelect(newBoard);
-      } else {
-        throw new Error('Failed to create board');
-      }
-    } catch (error) {
-      console.error('Failed to create board:', error);
-      alert('创建白板失败，请重试');
+  const handleCreateBoard = async (
+    name: string,
+    templateId?: string
+  ): Promise<ActionOutcome<Board | null>> => {
+    const outcome = await createBoardAction.run({ name, templateId });
+    // 服务端返回 null（如模板不存在）与请求失败走同一分支，不进入白板
+    if (!outcome.ok || outcome.data === null) {
+      const errorMessage = outcome.ok
+        ? '创建白板失败，请重试'
+        : outcome.error;
+      return { ok: false, error: errorMessage, notFound: false };
     }
+    await reloadBoards(userId);
+    onBoardSelect(outcome.data);
+    return { ok: true, data: outcome.data };
   };
 
   const myBoards = boards.filter((b) => b.ownerId === userId);
@@ -406,6 +410,41 @@ export const Dashboard: React.FC<DashboardProps> = ({ onBoardSelect }) => {
       </header>
 
       <main style={{ maxWidth: '1280px', margin: '0 auto', padding: '32px' }}>
+        {loadError && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '16px',
+              background: '#fef2f2',
+              border: '1px solid #fecaca',
+              borderRadius: '12px',
+              padding: '14px 20px',
+              marginBottom: '24px',
+              color: '#dc2626',
+              fontSize: '14px',
+            }}
+          >
+            <span>{loadError}</span>
+            <button
+              onClick={() => reloadBoards(userId)}
+              style={{
+                padding: '6px 16px',
+                fontSize: '13px',
+                fontWeight: 500,
+                color: '#fff',
+                background: '#dc2626',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              重新加载
+            </button>
+          </div>
+        )}
         <div
           style={{
             background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',

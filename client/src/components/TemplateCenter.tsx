@@ -1,87 +1,77 @@
 import React, { useState, useEffect } from 'react';
-import { Template } from '../types';
+import { Template, Board } from '../types';
 import { templateApi } from '../services/api';
+import { useResource, useAction, ActionOutcome } from '../hooks/useRequest';
 
 interface TemplateCenterProps {
   isOpen: boolean;
   onClose: () => void;
-  onCreate: (name: string, templateId?: string) => void;
+  onCreate: (name: string, templateId?: string) => Promise<ActionOutcome<Board | null>>;
 }
 
 export const TemplateCenter: React.FC<TemplateCenterProps> = ({ isOpen, onClose, onCreate }) => {
-  const [templates, setTemplates] = useState<Template[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
   const [name, setName] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+
+  // 统一读取流程：弹窗打开时加载模板列表，失败给出行内错误
+  const {
+    data: templatesData,
+    loading,
+    error: loadError,
+    reload: reloadTemplates,
+  } = useResource<Template[], []>(() => templateApi.getTemplates(), {
+    immediate: false,
+    scope: '加载模板列表',
+    errorMessage: '加载模板失败，请刷新重试',
+  });
+  const templates = templatesData ?? [];
+
+  // 统一创建流程：在途期间重复提交复用同一请求，杜绝重复白板
+  const {
+    executing: creating,
+    error: createError,
+    clearError: clearCreateError,
+    run: runCreate,
+  } = useAction(onCreate, { scope: '创建白板', errorMessage: '创建白板失败，请重试' });
 
   useEffect(() => {
     if (isOpen) {
-      loadTemplates();
+      void reloadTemplates();
+      clearCreateError();
       setSelectedTemplate(null);
       setName('');
-      setError(null);
     }
-  }, [isOpen]);
+  }, [isOpen, reloadTemplates, clearCreateError]);
 
-  const loadTemplates = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const data = await templateApi.getTemplates();
-      setTemplates(data);
-    } catch (error) {
-      console.error('Failed to load templates:', error);
-      setError('加载模板失败，请刷新重试');
-    } finally {
-      setLoading(false);
-    }
-  };
+  // 统一行内错误：列表加载失败 / 创建失败（同一类错误同一文案，同一展示位）
+  const error = createError || loadError;
 
   if (!isOpen) return null;
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (creating) return;
+  const submitCreate = async (templateId?: string) => {
+    const fallbackName =
+      templateId
+        ? templates.find((t) => t._id === templateId)?.name || '未命名白板'
+        : '未命名白板';
+    const boardName = name.trim() || fallbackName;
 
-    const boardName = name.trim() || (selectedTemplate
-      ? templates.find((t) => t._id === selectedTemplate)?.name || '未命名白板'
-      : '未命名白板');
-
-    try {
-      setCreating(true);
-      setError(null);
-      await onCreate(boardName, selectedTemplate || undefined);
+    const outcome = await runCreate(boardName, templateId);
+    if (outcome.ok) {
       setName('');
       setSelectedTemplate(null);
       onClose();
-    } catch (error) {
-      console.error('Failed to create board:', error);
-      setError('创建白板失败，请重试');
-    } finally {
-      setCreating(false);
     }
   };
 
-  const handleCreateBlank = async () => {
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
     if (creating) return;
+    void submitCreate(selectedTemplate || undefined);
+  };
 
-    const boardName = name.trim() || '未命名白板';
-
-    try {
-      setCreating(true);
-      setError(null);
-      await onCreate(boardName, undefined);
-      setName('');
-      setSelectedTemplate(null);
-      onClose();
-    } catch (error) {
-      console.error('Failed to create board:', error);
-      setError('创建白板失败，请重试');
-    } finally {
-      setCreating(false);
-    }
+  const handleCreateBlank = () => {
+    if (creating) return;
+    void submitCreate(undefined);
   };
 
   const TemplateCard: React.FC<{

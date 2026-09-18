@@ -1,44 +1,51 @@
 import { Board, Template } from '../types';
+import { request } from './http';
 
 const API_BASE_URL = '/api/boards';
 const TEMPLATE_API_URL = '/api/templates';
 
+type CreateBoardPayload = {
+  name: string;
+  ownerId: string;
+  width?: number;
+  height?: number;
+};
+
+type CreateBoardFromTemplatePayload = {
+  name: string;
+  ownerId: string;
+};
+
+const postJson = <T>(url: string, body: unknown, notFoundValue?: T): Promise<T> =>
+  request<T>(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    notFoundValue,
+  });
+
 export const boardApi = {
+  /** 列表：成功一定返回数组（空数组即「空列表」），失败抛 ApiError */
   async getBoards(userId: string): Promise<Board[]> {
-    const response = await fetch(`${API_BASE_URL}?userId=${userId}`);
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error || 'Failed to fetch boards');
-    }
-    return response.json();
+    return request<Board[]>(`${API_BASE_URL}?userId=${userId}`);
   },
 
+  /** 详情：找不到记录时返回 null（区别于空列表），其它失败抛 ApiError */
   async getBoard(boardId: string): Promise<Board | null> {
-    const response = await fetch(`${API_BASE_URL}/${boardId}`);
-    if (!response.ok) {
-      if (response.status === 404) return null;
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error || 'Failed to fetch board');
-    }
-    return response.json();
+    return request<Board | null>(`${API_BASE_URL}/${boardId}`, { notFoundValue: null });
   },
 
-  async createBoard(data: { name: string; ownerId: string; width?: number; height?: number }): Promise<Board | null> {
-    const response = await fetch(API_BASE_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error || 'Failed to create board');
-    }
-    return response.json();
+  /** 创建：同参数并发提交经 HTTP 层去重，不会产生重复记录 */
+  async createBoard(data: CreateBoardPayload): Promise<Board | null> {
+    return postJson<Board | null>(API_BASE_URL, data, null);
   },
 
+  /** 删除：记录不存在（404）时返回 false，成功返回 true（既有约定不变） */
   async deleteBoard(boardId: string): Promise<boolean> {
-    const response = await fetch(`${API_BASE_URL}/${boardId}`, { method: 'DELETE' });
-    return response.ok;
+    return request<boolean>(`${API_BASE_URL}/${boardId}`, {
+      method: 'DELETE',
+      notFoundValue: false,
+    });
   },
 
   getMockBoards(): Board[] {
@@ -172,38 +179,23 @@ const createMockBoardFromTemplate = (
 };
 
 export const templateApi = {
+  /** 模板列表：成功返回数组（可能为空数组），失败抛 ApiError */
   async getTemplates(): Promise<Template[]> {
-    const response = await fetch(TEMPLATE_API_URL);
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error || 'Failed to fetch templates');
-    }
-    return response.json();
+    return request<Template[]>(TEMPLATE_API_URL);
   },
 
+  /** 模板详情：找不到记录返回 null */
   async getTemplate(templateId: string): Promise<Template | null> {
-    const response = await fetch(`${TEMPLATE_API_URL}/${templateId}`);
-    if (!response.ok) {
-      if (response.status === 404) return null;
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error || 'Failed to fetch template');
-    }
-    return response.json();
+    return request<Template | null>(`${TEMPLATE_API_URL}/${templateId}`, { notFoundValue: null });
   },
 
+  /** 从模板创建白板：同参数并发提交经 HTTP 层去重，模板不存在返回 null */
   async createBoardFromTemplate(
     templateId: string,
-    data: { name: string; ownerId: string }
+    data: CreateBoardFromTemplatePayload
   ): Promise<Board | null> {
-    const response = await fetch(`${TEMPLATE_API_URL}/${templateId}/create`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error || 'Failed to create board from template');
-    }
-    return response.json();
+    return postJson<Board | null>(`${TEMPLATE_API_URL}/${templateId}/create`, data, null);
   },
 };
+
+export { mockTemplates, createMockBoardFromTemplate };
